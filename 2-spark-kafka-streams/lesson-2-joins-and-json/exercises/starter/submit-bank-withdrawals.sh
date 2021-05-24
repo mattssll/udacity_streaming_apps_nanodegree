@@ -1,2 +1,3 @@
 #!/bin/bash
-docker exec -it nd029-c2-apache-spark-and-spark-streaming-starter_spark_1 /opt/bitnami/spark/bin/spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.0 /home/workspace/lesson-2-joins-and-json/exercises/starter/bank-withdrawals.py | tee ../../../spark/logs/bank-withdrawals.log 
+#docker exec -it nd029-c2-apache-spark-and-spark-streaming-starter_spark_1 /opt/bitnami/spark/bin/spark-submit 
+spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.0 /Users/mateus.leao/Documents/mattssll/courses/udacity_data_streaming/2-spark-kafka-streams/lesson-2-joins-and-json/exercises/starter/3.synk-kafka-bank-withdrawals.py | tee ../../../spark/logs/bank-deposits.log 

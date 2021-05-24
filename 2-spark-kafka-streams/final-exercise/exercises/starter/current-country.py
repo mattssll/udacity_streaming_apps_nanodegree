@@ -23,58 +23,112 @@ redisMessageSchema = StructType(
     ]
 )
 
-# TO-DO: create a StructType for the Customer schema for the following fields:
+
+# this is a manually created schema - before Spark 3.0.0, schema inference is not automatic
+# since we are not using the date in sql calculations, we are going
+# to cast them as strings
 # {"customerName":"Frank Aristotle","email":"Frank.Aristotle@test.com","phone":"7015551212","birthDay":"1948-01-01","accountNumber":"750271955","location":"Jordan"}
+customerJSONSchema = StructType (
+    [
+        StructField("customerName",StringType()),
+        StructField("email",StringType()),
+        StructField("phone",StringType()),
+        StructField("birthDay",StringType()),
+        StructField("accountNumber",StringType()),
+        StructField("location",StringType())        
+    ]
+)
 
-# TO-DO: create a StructType for the CustomerLocation schema for the following fields:
-# {"accountNumber":"814840107","location":"France"}
+# this is a manually created schema - before Spark 3.0.0, schema inference is not automatic
+# {"accountNumber":"703934969","amount":625.8,"dateAndTime":"Sep 29, 2020, 10:06:23 AM","transactionId":1601395583682}
+customerLocationSchema = StructType (
+    [
+        StructField("accountNumber", StringType()),
+        StructField("location", StringType()),
+    ]   
+)
 
-# TO-DO: create a spark session, with an appropriately named application name
+# the source for this data pipeline is a kafka topic, defined below
+spark = SparkSession.builder.appName("customer-record").getOrCreate()
+spark.sparkContext.setLogLevel('WARN')
 
-#TO-DO: set the log level to WARN
+redisServerRawStreamingDF = spark                          \
+    .readStream                                          \
+    .format("kafka")                                     \
+    .option("kafka.bootstrap.servers", "localhost:9092") \
+    .option("subscribe","redis-server")                  \
+    .option("startingOffsets","earliest")\
+    .load()                                     
 
-#TO-DO: read the redis-server kafka topic as a source into a streaming dataframe with the bootstrap server kafka:19092, configuring the stream to read the earliest messages possible                                    
+#it is necessary for Kafka Data Frame to be readable, to cast each field from a binary to a string
+redisServerStreamingDF = redisServerRawStreamingDF.selectExpr("cast(key as string) key", "cast(value as string) value")
 
-#TO-DO: using a select expression on the streaming dataframe, cast the key and the value columns from kafka as strings, and then select them
+# this creates a temporary streaming view based on the streaming dataframe
+# it can later be queried with spark.sql, we will cover that in the next section 
+redisServerStreamingDF.withColumn("value",from_json("value",redisMessageSchema))\
+        .select(col('value.*')) \
+        .createOrReplaceTempView("RedisData")
 
-#TO-DO: using the redisMessageSchema StructType, deserialize the JSON from the streaming dataframe 
+# Using spark.sql we can select any valid select statement from the spark view
+zSetEntriesEncodedStreamingDF=spark.sql("select key, zSetEntries[0].element as redisEvent from RedisData")
 
-# TO-DO: create a temporary streaming view called "RedisData" based on the streaming dataframe
-# it can later be queried with spark.sql
+# Here we are base64 decoding the redisEvent
+zSetDecodedEntriesStreamingDF1= zSetEntriesEncodedStreamingDF.withColumn("redisEvent", unbase64(zSetEntriesEncodedStreamingDF.redisEvent).cast("string"))
+zSetDecodedEntriesStreamingDF2= zSetEntriesEncodedStreamingDF.withColumn("redisEvent", unbase64(zSetEntriesEncodedStreamingDF.redisEvent).cast("string"))
 
-#TO-DO: using spark.sql, select key, zSetEntries[0].element as redisEvent from RedisData
+# Filter DF1 for only those that contain the birthDay field (customer record)
 
-#TO-DO: from the dataframe use the unbase64 function to select a column called redisEvent with the base64 decoded JSON, and cast it to a string
+zSetDecodedEntriesStreamingDF1.filter(col("redisEvent").contains("birthDay"))
 
-#TO-DO: repeat this a second time, so now you have two separate dataframes that contain redisEvent data
+# Filter DF2 for only those that do not contain the birthDay field (all records other than customer) we will filter out null rows later
+zSetDecodedEntriesStreamingDF2.filter(~col("redisEvent").contains("birthDay"))
 
-#TO-DO: using the customer StructType, deserialize the JSON from the first redis decoded streaming dataframe, selecting column customer.* as a temporary view called Customer 
 
-#TO-DO: using the customer location StructType, deserialize the JSON from the second redis decoded streaming dataframe, selecting column customerLocation.* as a temporary view called CustomerLocation 
+# Now we are parsing JSON from the redisEvent that contains customer record data
+zSetDecodedEntriesStreamingDF1\
+    .withColumn("customer", from_json("redisEvent", customerJSONSchema))\
+    .select(col('customer.*'))\
+    .createOrReplaceTempView("Customer")\
 
-#TO-DO: using spark.sql select accountNumber as customerAccountNumber, location as homeLocation, birthDay from Customer where birthDay is not null
+# Last we are parsing JSON from the redisEvent that contains customer location data
+zSetDecodedEntriesStreamingDF2\
+    .withColumn("customerLocation", from_json("redisEvent", customerLocationSchema))\
+    .select(col('customerLocation.*'))\
+    .createOrReplaceTempView("CustomerLocation")\
 
-#TO-DO: select the customerAccountNumber, homeLocation, and birth year (using split)
+# Let's use some column aliases to avoid column name clashes
+customerStreamingDF = spark.sql("select accountNumber as customerAccountNumber, location as homeLocation, birthDay from Customer where birthDay is not null")
 
-#TO-DO: using spark.sql select accountNumber as locationAccountNumber, and location
+# We parse the birthdate to get just the year, that helps determine age
+relevantCustomerFieldsStreamingDF = customerStreamingDF.select('customerAccountNumber','homeLocation',split(customerStreamingDF.birthDay,"-").getItem(0).alias("birthYear"))
 
-#TO-DO: join the customer and customer location data using the expression: customerAccountNumber = locationAccountNumber
+# Let's use some more column alisases on the customer location 
+customerLocationStreamingDF = spark.sql("select accountNumber as locationAccountNumber, location from CustomerLocation")
 
-# TO-DO: write the stream to the console, and configure it to run indefinitely
-# can you find the customer(s) who are traveling out of their home countries?
-# When calling the customer, customer service will use their birth year to help
-# establish their identity, to reduce the risk of fraudulent transactions.
+currentAndHomeLocationStreamingDF = customerLocationStreamingDF.join(relevantCustomerFieldsStreamingDF, expr( """
+   customerAccountNumber=locationAccountNumber
+"""
+))
+
+# This takes the stream and "sinks" it to the console as it is updated one message at a time:
+
 # +---------------------+-----------+---------------------+------------+---------+
 # |locationAccountNumber|   location|customerAccountNumber|homeLocation|birthYear|
 # +---------------------+-----------+---------------------+------------+---------+
-# |            982019843|  Australia|            982019843|   Australia|     1943|
-# |            581813546|Phillipines|            581813546| Phillipines|     1939|
-# |            202338628|Phillipines|            202338628|       China|     1944|
-# |             33621529|     Mexico|             33621529|      Mexico|     1941|
-# |            266358287|     Canada|            266358287|      Uganda|     1946|
-# |            738844826|      Egypt|            738844826|       Egypt|     1947|
-# |            128705687|    Ukraine|            128705687|      France|     1964|
-# |            527665995|   DR Congo|            527665995|    DR Congo|     1942|
-# |            277678857|  Indonesia|            277678857|   Indonesia|     1937|
-# |            402412203|   DR Congo|            402412203|    DR Congo|     1945|
+# |            735944113|      Syria|            735944113|       Syria|     1952|
+# |            735944113|      Syria|            735944113|       Syria|     1952|
+# |             45952249|New Zealand|             45952249| New Zealand|     1939|
+# |            792107998|     Uganda|            792107998|      Uganda|     1951|
+# |            792107998|     Uganda|            792107998|      Uganda|     1951|
+# |            212014318|     Mexico|            212014318|      Mexico|     1941|
+# |             87719362|     Jordan|             87719362|      Jordan|     1937|
+# |            792350429|    Nigeria|            792350429|     Nigeria|     1949|
+# |            411299601|Afghanistan|            411299601| Afghanistan|     1950|
+# |            947563502|     Mexico|            947563502|      Mexico|     1944|
+# |            920257090|      Syria|            920257090|       Syria|     1948|
+# |            723658544|       Iraq|            723658544|        Iraq|     1943|
+# |             39252304|    Alabama|             39252304|     Alabama|     1965|
+# |             39252304|    Alabama|             39252304|     Alabama|     1965|
+# |            508037708|     Brazil|            508037708|      Brazil|     1947|
 # +---------------------+-----------+---------------------+------------+---------+
+currentAndHomeLocationStreamingDF.writeStream.outputMode("append").format("console").start().awaitTermination()

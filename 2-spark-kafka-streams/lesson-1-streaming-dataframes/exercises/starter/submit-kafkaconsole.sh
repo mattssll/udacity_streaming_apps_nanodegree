@@ -1,2 +1,2 @@
 #!/bin/bash
-docker exec -it nd029-c2-apache-spark-and-spark-streaming-starter_spark_1 /opt/bitnami/spark/bin/spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.0 /home/workspace/lesson-1-streaming-dataframes/exercises/starter/kafkaconsole.py | tee ../../../spark/logs/kafkaconsole.log 
+spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.0.0 /Users/mateus.leao/Documents/mattssll/courses/udacity_data_streaming/2-spark-kafka-streams/lesson-1-streaming-dataframes/exercises/starter/2.kafkaconsole.py

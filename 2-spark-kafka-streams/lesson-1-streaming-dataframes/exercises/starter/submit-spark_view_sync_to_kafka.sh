@@ -1,0 +1,1 @@
+/Users/mateus.leao/Documents/mattssll/streamsets_spark_transformer/spark-2.4.7-bin-hadoop2.7/bin/spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.1 /Users/mateus.leao/Documents/mattssll/courses/udacity_data_streaming/2-spark-kafka-streams/lesson-1-streaming-dataframes/exercises/starter/3.spark_view_sync_to_kafka.py 
